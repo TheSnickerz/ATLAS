@@ -19,6 +19,10 @@ builder.Services.AddHttpClient<NvdSyncService>(client =>
 // Singleton tracks live sync progress across the background task and polling requests
 builder.Services.AddSingleton<SyncProgressTracker>();
 
+// Greenbone integration
+builder.Services.AddSingleton<GreenboneSyncTracker>();
+builder.Services.AddTransient<GreenboneService>();
+
 var app = builder.Build();
 
 using (var scope = app.Services.CreateScope())

@@ -7,7 +7,8 @@ services:
       - atlas-data:/app/data   # persists atlas.db across container restarts
     environment:
       - ASPNETCORE_ENVIRONMENT=Production
-      - NvdApiKey=${NVD_API_KEY:-}   # set NVD_API_KEY in your shell or a .env file
+      - NvdApiKey=${NVD_API_KEY:-}             # set NVD_API_KEY in your shell or a .env file
+      - GREENBONE_PASSWORD=${GREENBONE_PASSWORD:-}  # Greenbone GMP service account password
     restart: unless-stopped
 
 volumes:
