@@ -1,13 +1,156 @@
-@model IEnumerable<ATLAS.Models.Asset>
+@model ATLAS.Models.AssetIndexViewModel
 @{
     ViewData["Title"] = "Assets";
 }
 
 <div class="d-flex justify-content-between align-items-center mb-3">
     <h2>Assets</h2>
-    <a asp-action="Create" class="btn btn-primary">+ Add Asset</a>
+    <div class="d-flex gap-2">
+        <button class="btn btn-outline-success"
+                type="button"
+                data-bs-toggle="collapse"
+                data-bs-target="#gbSyncPanel"
+                aria-expanded="false"
+                aria-controls="gbSyncPanel">
+            &#8635; Import from Greenbone
+        </button>
+        <a asp-action="Create" class="btn btn-primary">+ Add Asset</a>
+    </div>
 </div>
 
+@* ── Greenbone sync panel ──────────────────────────────────────────────────── *@
+<div class="collapse mb-3" id="gbSyncPanel">
+    <div class="card border-success shadow-sm">
+        <div class="card-header bg-success text-white fw-semibold">
+            Import Assets &amp; Vulnerabilities from Greenbone
+        </div>
+        <div class="card-body">
+            <p class="text-muted small mb-3">
+                Connects to <strong>10.40.10.88:9390</strong> and pulls all scan results.
+                New hosts are auto-created as Computer assets. Existing assets are matched by IP address.
+                Findings are linked to CVEs already in your vulnerability library.
+            </p>
+
+            <div class="d-flex gap-2 align-items-center">
+                <form id="gbSyncForm">
+                    @Html.AntiForgeryToken()
+                    <button type="button" id="gbSyncBtn" class="btn btn-success"
+                            onclick="startGbSync()">
+                        &#8635; Start Import
+                    </button>
+                </form>
+                <button type="button" id="gbTestBtn" class="btn btn-outline-secondary"
+                        onclick="testGbConnection()">
+                    Test Connection
+                </button>
+                <span id="gbTestResult" class="small ms-2"></span>
+            </div>
+
+            @* ── Live progress panel ─────────────────────────────────────────── *@
+            <div id="gbProgress" class="mt-4 d-none">
+                <div class="d-flex justify-content-between align-items-center mb-1">
+                    <span id="gbPhaseLabel" class="fw-semibold text-success small"></span>
+                    <span id="gbElapsed"    class="text-muted small"></span>
+                </div>
+
+                <div class="progress mb-2" style="height: 18px;">
+                    <div id="gbProgressBar"
+                         class="progress-bar progress-bar-striped progress-bar-animated bg-success"
+                         role="progressbar" style="width: 5%" aria-valuenow="5"
+                         aria-valuemin="0" aria-valuemax="100">
+                        <span id="gbProgressPct"></span>
+                    </div>
+                </div>
+
+                <div class="d-flex justify-content-between">
+                    <small id="gbFetchLabel" class="text-muted"></small>
+                    <small id="gbSavedLabel" class="text-muted"></small>
+                </div>
+
+                <div id="gbSuccessBanner" class="alert alert-success alert-dismissible fade mt-3 d-none" role="alert">
+                    <span id="gbSuccessText"></span>
+                    <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+                </div>
+                <div id="gbErrorBanner" class="alert alert-danger alert-dismissible fade mt-3 d-none" role="alert">
+                    <span id="gbErrorText"></span>
+                    <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+@* ── Greenbone delta section (rendered by JS after sync completes) ─────────── *@
+<div id="gbDeltaSection" class="d-none mb-4">
+    <h5 class="text-success">&#8635; Changes from last Greenbone sync</h5>
+    <table class="table table-hover table-bordered table-sm">
+        <thead class="table-success">
+            <tr>
+                <th>Asset</th>
+                <th>IP</th>
+                <th>Findings</th>
+                <th>Worst CVE</th>
+                <th>Worst CVSS</th>
+                <th>Severity</th>
+            </tr>
+        </thead>
+        <tbody id="gbDeltaBody"></tbody>
+    </table>
+</div>
+
+@* ── Search / filter bar ───────────────────────────────────────────────────── *@
+<form method="get" class="row g-2 mb-3">
+    <div class="col-md-5">
+        <input name="search" class="form-control" placeholder="Search name, owner, department, location…"
+               value="@Model.Search" />
+    </div>
+    <div class="col-md-3">
+        <select name="vlan" class="form-select">
+            <option value="">All VLANs</option>
+            @foreach (var v in Model.AvailableVlans)
+            {
+                if (Model.VlanFilter == v) { <option value="@v" selected>@v</option> }
+                else                       { <option value="@v">@v</option> }
+            }
+        </select>
+    </div>
+    <div class="col-auto d-flex gap-2">
+        <button type="submit" class="btn btn-primary">Filter</button>
+        <a asp-action="Index" class="btn btn-outline-secondary">Reset</a>
+    </div>
+    <input type="hidden" name="pageSize" value="@Model.PageSize" />
+</form>
+
+@* ── Result count + page-size selector ───────────────────────────────────────── *@
+<div class="d-flex justify-content-between align-items-center mb-2">
+    <small class="text-muted">
+        @if (Model.TotalFilteredCount == 0)
+        {
+            <span>No assets found.</span>
+        }
+        else
+        {
+            <span>
+                Showing @((Model.Page - 1) * Model.PageSize + 1)–@(Math.Min(Model.Page * Model.PageSize, Model.TotalFilteredCount))
+                of @Model.TotalFilteredCount asset(s)
+            </span>
+        }
+    </small>
+    <form method="get" class="d-flex align-items-center gap-2">
+        <input type="hidden" name="search" value="@Model.Search" />
+        <input type="hidden" name="vlan"   value="@Model.VlanFilter" />
+        <label class="small text-muted mb-0">Per page:</label>
+        <select name="pageSize" class="form-select form-select-sm w-auto" onchange="this.form.submit()">
+            @foreach (var ps in new[] { 25, 50, 100 })
+            {
+                if (Model.PageSize == ps) { <option value="@ps" selected>@ps</option> }
+                else                      { <option value="@ps">@ps</option> }
+            }
+        </select>
+    </form>
+</div>
+
+@* ── Assets table ─────────────────────────────────────────────────────────── *@
 <table class="table table-hover table-bordered">
     <thead class="table-dark">
         <tr>
@@ -15,6 +158,7 @@
             <th>Category</th>
             <th>Type / Subtype</th>
             <th>Identifier</th>
+            <th>VLAN</th>
             <th>Owner</th>
             <th>Status</th>
             <th>Open Findings</th>
@@ -22,7 +166,7 @@
         </tr>
     </thead>
     <tbody>
-        @foreach (var a in Model)
+        @foreach (var a in Model.Assets)
         {
             var openCount = a.AssetVulnerabilities.Count(av => av.Status == ATLAS.Models.RemediationStatus.Open);
             <tr>
@@ -30,6 +174,7 @@
                 <td>@a.Category</td>
                 <td>@a.SubTypeLabel</td>
                 <td><small class="text-muted">@(a.Identifier ?? "—")</small></td>
+                <td><small class="text-muted">@(a.Vlan ?? "—")</small></td>
                 <td>@(a.Owner ?? "—")</td>
                 <td>
                     <span class="badge bg-@(a.Status == ATLAS.Models.AssetStatus.Active ? "success" : "secondary")">
@@ -47,14 +192,225 @@
                     }
                 </td>
                 <td>
-                    <a asp-action="Edit" asp-route-id="@a.Id" class="btn btn-sm btn-outline-secondary">Edit</a>
+                    <a asp-action="Edit"   asp-route-id="@a.Id" class="btn btn-sm btn-outline-secondary">Edit</a>
                     <a asp-action="Delete" asp-route-id="@a.Id" class="btn btn-sm btn-outline-danger">Delete</a>
                 </td>
             </tr>
         }
-        @if (!Model.Any())
+        @if (!Model.Assets.Any())
         {
-            <tr><td colspan="8" class="text-center text-muted py-4">No assets yet. <a asp-action="Create">Add one.</a></td></tr>
+            <tr><td colspan="9" class="text-center text-muted py-4">No assets found. @if (Model.Search != null || Model.VlanFilter != null) { <a asp-action="Index">Clear filters.</a> } else { <a asp-action="Create">Add one.</a> }</td></tr>
         }
     </tbody>
 </table>
+
+@* ── Pagination ───────────────────────────────────────────────────────────── *@
+@if (Model.TotalPages > 1)
+{
+    <nav aria-label="Asset pages">
+        <ul class="pagination justify-content-center flex-wrap">
+            @{
+                int winStart = Math.Max(1, Model.Page - 4);
+                int winEnd   = Math.Min(Model.TotalPages, Model.Page + 4);
+            }
+            @if (winStart > 1)
+            {
+                <li class="page-item">
+                    <a class="page-link" asp-action="Index"
+                       asp-route-page="1" asp-route-search="@Model.Search"
+                       asp-route-vlan="@Model.VlanFilter" asp-route-pageSize="@Model.PageSize">1</a>
+                </li>
+                @if (winStart > 2) { <li class="page-item disabled"><span class="page-link">…</span></li> }
+            }
+            @for (var p = winStart; p <= winEnd; p++)
+            {
+                <li class="page-item @(p == Model.Page ? "active" : "")">
+                    <a class="page-link" asp-action="Index"
+                       asp-route-page="@p" asp-route-search="@Model.Search"
+                       asp-route-vlan="@Model.VlanFilter" asp-route-pageSize="@Model.PageSize">@p</a>
+                </li>
+            }
+            @if (winEnd < Model.TotalPages)
+            {
+                @if (winEnd < Model.TotalPages - 1) { <li class="page-item disabled"><span class="page-link">…</span></li> }
+                <li class="page-item">
+                    <a class="page-link" asp-action="Index"
+                       asp-route-page="@Model.TotalPages" asp-route-search="@Model.Search"
+                       asp-route-vlan="@Model.VlanFilter" asp-route-pageSize="@Model.PageSize">@Model.TotalPages</a>
+                </li>
+            }
+        </ul>
+    </nav>
+}
+
+@section Scripts {
+<script>
+    let gbPollTimer = null;
+
+    // ── Test Connection ───────────────────────────────────────────────────────
+    async function testGbConnection() {
+        const btn = document.getElementById('gbTestBtn');
+        const res = document.getElementById('gbTestResult');
+        btn.disabled = true;
+        res.textContent = 'Testing…';
+        res.className = 'small ms-2 text-muted';
+        try {
+            const r = await fetch('@Url.Action("TestConnection", "Greenbone")');
+            const d = await r.json();
+            res.textContent = d.ok ? '✔ ' + d.message : '✘ ' + d.message;
+            res.className = 'small ms-2 ' + (d.ok ? 'text-success' : 'text-danger');
+        } catch (e) {
+            res.textContent = '✘ ' + e.message;
+            res.className = 'small ms-2 text-danger';
+        }
+        btn.disabled = false;
+    }
+
+    // ── Start Sync ────────────────────────────────────────────────────────────
+    async function startGbSync() {
+        const btn   = document.getElementById('gbSyncBtn');
+        const token = document.querySelector('#gbSyncForm input[name="__RequestVerificationToken"]').value;
+        gbHideBanners();
+        btn.disabled = true;
+        btn.textContent = 'Importing…';
+
+        try {
+            const r = await fetch('@Url.Action("Sync", "Greenbone")', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: '__RequestVerificationToken=' + encodeURIComponent(token)
+            });
+            const d = await r.json();
+            if (!d.started) {
+                gbShowError(d.message ?? 'Already running.');
+                btn.disabled = false;
+                btn.innerHTML = '&#8635; Start Import';
+                return;
+            }
+        } catch (e) {
+            gbShowError('Failed to start: ' + e.message);
+            btn.disabled = false;
+            btn.innerHTML = '&#8635; Start Import';
+            return;
+        }
+
+        document.getElementById('gbProgress').classList.remove('d-none');
+        gbPollTimer = setInterval(gbPollStatus, 2000);
+        gbPollStatus();
+    }
+
+    // ── Poll Status ───────────────────────────────────────────────────────────
+    async function gbPollStatus() {
+        try {
+            const r = await fetch('@Url.Action("Status", "Greenbone")');
+            const s = await r.json();
+            gbUpdateProgress(s);
+        } catch (_) { /* keep polling on network hiccup */ }
+    }
+
+    function gbUpdateProgress(s) {
+        const phaseMap = {
+            'Connecting': '🔌 Connecting to Greenbone…',
+            'Loading':    '📋 Loading existing records…',
+            'Fetching':   '⬇ Fetching scan results…',
+            'Saving':     '💾 Saving to database…',
+            'Done':       '✔ Import complete',
+            'Failed':     '✘ Import failed'
+        };
+        document.getElementById('gbPhaseLabel').textContent = phaseMap[s.phase] ?? s.phase;
+        document.getElementById('gbElapsed').textContent =
+            s.elapsedSeconds > 0 ? gbFormatElapsed(s.elapsedSeconds) : '';
+
+        // Indeterminate progress bar while fetching (we don't know total upfront)
+        const bar = document.getElementById('gbProgressBar');
+        if (!s.isDone) {
+            bar.style.width = '100%';
+        } else {
+            bar.classList.remove('progress-bar-animated', 'progress-bar-striped');
+            bar.style.width = '100%';
+        }
+
+        document.getElementById('gbFetchLabel').textContent =
+            s.resultsFetched > 0 ? s.resultsFetched.toLocaleString() + ' results fetched' : '';
+
+        const saved = [];
+        if (s.assetsCreated > 0)   saved.push(s.assetsCreated + ' assets created');
+        if (s.assetsUpdated > 0)   saved.push(s.assetsUpdated + ' assets updated');
+        if (s.findingsAdded > 0)   saved.push(s.findingsAdded + ' findings added');
+        if (s.findingsUpdated > 0) saved.push(s.findingsUpdated + ' updated');
+        document.getElementById('gbSavedLabel').textContent = saved.join(' · ');
+
+        if (s.isDone) {
+            clearInterval(gbPollTimer);
+            gbPollTimer = null;
+            const btn = document.getElementById('gbSyncBtn');
+            btn.disabled = false;
+            btn.innerHTML = '&#8635; Start Import';
+
+            if (s.phase === 'Done') {
+                bar.classList.remove('bg-danger');
+                gbShowSuccess(
+                    '✔ Import complete — ' + saved.join(', ') + ' in ' + gbFormatElapsed(s.elapsedSeconds) + '.'
+                );
+                // Load delta table
+                loadGbDelta();
+            } else {
+                bar.classList.add('bg-danger');
+                gbShowError('Import failed: ' + (s.error ?? 'Unknown error'));
+            }
+        }
+    }
+
+    // ── Delta table ───────────────────────────────────────────────────────────
+    async function loadGbDelta() {
+        try {
+            const r = await fetch('@Url.Action("AssetDelta", "Greenbone")');
+            const d = await r.json();
+            if (!d.items || d.items.length === 0) return;
+
+            const tbody = document.getElementById('gbDeltaBody');
+            tbody.innerHTML = '';
+            const severityClass = { Critical: 'danger', High: 'warning', Medium: 'info', Low: 'secondary' };
+
+            d.items.forEach(function (item) {
+                const sc = severityClass[item.worstSeverity] || 'secondary';
+                tbody.innerHTML += `<tr>
+                    <td><a href="/Assets/Details/${item.assetId}">${item.assetName}</a></td>
+                    <td><small class="text-muted">${item.ip || '—'}</small></td>
+                    <td>${item.findingsTotal}</td>
+                    <td><small class="font-monospace">${item.worstCveId || '—'}</small></td>
+                    <td>${item.worstCvss != null ? item.worstCvss.toFixed(1) : '—'}</td>
+                    <td><span class="badge bg-${sc}">${item.worstSeverity}</span></td>
+                </tr>`;
+            });
+
+            document.getElementById('gbDeltaSection').classList.remove('d-none');
+        } catch (_) { /* delta is best-effort */ }
+    }
+
+    function gbFormatElapsed(sec) {
+        if (sec < 60) return sec + 's';
+        return Math.floor(sec / 60) + 'm ' + (sec % 60) + 's';
+    }
+
+    function gbShowSuccess(msg) {
+        const el = document.getElementById('gbSuccessBanner');
+        document.getElementById('gbSuccessText').textContent = msg;
+        el.classList.remove('d-none'); el.classList.add('show');
+    }
+
+    function gbShowError(msg) {
+        document.getElementById('gbProgress').classList.remove('d-none');
+        const el = document.getElementById('gbErrorBanner');
+        document.getElementById('gbErrorText').textContent = msg;
+        el.classList.remove('d-none'); el.classList.add('show');
+    }
+
+    function gbHideBanners() {
+        ['gbSuccessBanner', 'gbErrorBanner'].forEach(function (id) {
+            const el = document.getElementById(id);
+            el.classList.add('d-none'); el.classList.remove('show');
+        });
+    }
+</script>
+}

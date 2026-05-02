@@ -48,6 +48,9 @@ public abstract class Asset
     [MaxLength(200)]
     public string? Location { get; set; }
 
+    [MaxLength(50), Display(Name = "VLAN")]
+    public string? Vlan { get; set; }
+
     public AssetStatus Status { get; set; } = AssetStatus.Active;
 
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;

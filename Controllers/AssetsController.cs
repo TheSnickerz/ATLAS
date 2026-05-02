@@ -14,13 +14,54 @@ public class AssetsController : Controller
 
     // ── Index ────────────────────────────────────────────────────────────────
 
-    public async Task<IActionResult> Index()
+    public async Task<IActionResult> Index(
+        string? search = null, string? vlan = null,
+        int page = 1, int pageSize = 25)
     {
-        var assets = await _db.Assets
+        if (pageSize != 25 && pageSize != 50 && pageSize != 100) pageSize = 25;
+        page = Math.Max(1, page);
+
+        var availableVlans = await _db.Assets
+            .Where(a => a.Vlan != null && a.Vlan != "")
+            .Select(a => a.Vlan!)
+            .Distinct()
+            .OrderBy(v => v)
+            .ToListAsync();
+
+        var query = _db.Assets.AsQueryable();
+
+        if (!string.IsNullOrWhiteSpace(search))
+        {
+            var t = search.Trim();
+            query = query.Where(a =>
+                a.Name.Contains(t) ||
+                (a.Owner      != null && a.Owner.Contains(t)) ||
+                (a.Department != null && a.Department.Contains(t)) ||
+                (a.Location   != null && a.Location.Contains(t)));
+        }
+
+        if (!string.IsNullOrWhiteSpace(vlan))
+            query = query.Where(a => a.Vlan == vlan);
+
+        var totalFiltered = await query.CountAsync();
+
+        var assets = await query
             .Include(a => a.AssetVulnerabilities)
             .OrderBy(a => a.Name)
+            .Skip((page - 1) * pageSize)
+            .Take(pageSize)
             .ToListAsync();
-        return View(assets);
+
+        return View(new AssetIndexViewModel
+        {
+            Assets             = assets,
+            Page               = page,
+            PageSize           = pageSize,
+            TotalFilteredCount = totalFiltered,
+            Search             = search,
+            VlanFilter         = vlan,
+            AvailableVlans     = availableVlans,
+        });
     }
 
     // ── Details ──────────────────────────────────────────────────────────────
@@ -234,14 +275,15 @@ public class AssetsController : Controller
 
     private static void ApplyCommonFields(Asset asset, AssetFormViewModel vm)
     {
-        asset.Name               = vm.Name;
-        asset.Description        = vm.Description;
-        asset.Owner              = vm.Owner;
+        asset.Name                = vm.Name;
+        asset.Description         = vm.Description;
+        asset.Owner               = vm.Owner;
         asset.BusinessStakeholder = vm.BusinessStakeholder;
-        asset.Department         = vm.Department;
-        asset.Location           = vm.Location;
-        asset.Status             = vm.Status;
-        asset.Notes              = vm.Notes;
+        asset.Department          = vm.Department;
+        asset.Location            = vm.Location;
+        asset.Vlan                = vm.Vlan;
+        asset.Status              = vm.Status;
+        asset.Notes               = vm.Notes;
     }
 
     private static void ApplyTypeSpecificFields(Asset asset, AssetFormViewModel vm)
@@ -301,17 +343,18 @@ public class AssetsController : Controller
     {
         var vm = new AssetFormViewModel
         {
-            Id          = asset.Id,
-            Category    = asset.Category,
-            Name               = asset.Name,
-            Description        = asset.Description,
-            Owner              = asset.Owner,
+            Id                  = asset.Id,
+            Category            = asset.Category,
+            Name                = asset.Name,
+            Description         = asset.Description,
+            Owner               = asset.Owner,
             BusinessStakeholder = asset.BusinessStakeholder,
-            Department         = asset.Department,
-            Location           = asset.Location,
-            Status             = asset.Status,
-            Notes              = asset.Notes,
-            CreatedAt          = asset.CreatedAt,
+            Department          = asset.Department,
+            Location            = asset.Location,
+            Vlan                = asset.Vlan,
+            Status              = asset.Status,
+            Notes               = asset.Notes,
+            CreatedAt           = asset.CreatedAt,
         };
 
         switch (asset)

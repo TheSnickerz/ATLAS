@@ -10,6 +10,14 @@
 <div class="d-flex justify-content-between align-items-center mb-2">
     <h2 class="mb-0">Vulnerability Library</h2>
     <div class="d-flex gap-2">
+        <button class="btn btn-outline-success"
+                type="button"
+                data-bs-toggle="collapse"
+                data-bs-target="#gbSyncPanel"
+                aria-expanded="false"
+                aria-controls="gbSyncPanel">
+            &#8635; Import from Greenbone
+        </button>
         <button class="btn btn-outline-primary"
                 type="button"
                 data-bs-toggle="collapse"
@@ -20,6 +28,67 @@
         </button>
         <a asp-action="Create" class="btn btn-danger">+ Add Manually</a>
     </div>
+</div>
+
+@* ── Greenbone sync panel ──────────────────────────────────────────────────── *@
+<div class="collapse mb-3" id="gbSyncPanel">
+    <div class="card border-success shadow-sm">
+        <div class="card-header bg-success text-white fw-semibold">
+            Import Findings from Greenbone Scan Results
+        </div>
+        <div class="card-body">
+            <p class="text-muted small mb-3">
+                Pulls all scan findings from <strong>10.40.10.88:9390</strong> and links them to
+                CVEs already in your vulnerability library. New hosts are auto-created as assets.
+                Findings not matching an existing CVE are added as new vulnerabilities.
+            </p>
+
+            <div class="d-flex gap-2 align-items-center">
+                <form id="gbSyncForm">
+                    @Html.AntiForgeryToken()
+                    <button type="button" id="gbSyncBtn" class="btn btn-success"
+                            onclick="startGbSync()">
+                        &#8635; Start Import
+                    </button>
+                </form>
+            </div>
+
+            <div id="gbProgress" class="mt-4 d-none">
+                <div class="d-flex justify-content-between align-items-center mb-1">
+                    <span id="gbPhaseLabel" class="fw-semibold text-success small"></span>
+                    <span id="gbElapsed"    class="text-muted small"></span>
+                </div>
+                <div class="progress mb-2" style="height:18px;">
+                    <div id="gbProgressBar"
+                         class="progress-bar progress-bar-striped progress-bar-animated bg-success"
+                         role="progressbar" style="width:100%"></div>
+                </div>
+                <div class="d-flex justify-content-between">
+                    <small id="gbFetchLabel" class="text-muted"></small>
+                    <small id="gbSavedLabel" class="text-muted"></small>
+                </div>
+                <div id="gbSuccessBanner" class="alert alert-success alert-dismissible fade mt-3 d-none" role="alert">
+                    <span id="gbSuccessText"></span>
+                    <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+                </div>
+                <div id="gbErrorBanner" class="alert alert-danger alert-dismissible fade mt-3 d-none" role="alert">
+                    <span id="gbErrorText"></span>
+                    <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+@* ── Greenbone delta section ───────────────────────────────────────────────── *@
+<div id="gbFindingDeltaSection" class="d-none mb-4">
+    <h5 class="text-success">&#8635; New findings since last Greenbone sync</h5>
+    <table class="table table-hover table-bordered table-sm">
+        <thead class="table-success">
+            <tr><th>CVE</th><th>Title</th><th>Severity</th><th>CVSS</th><th>Asset</th><th>Detected</th></tr>
+        </thead>
+        <tbody id="gbFindingDeltaBody"></tbody>
+    </table>
 </div>
 
 @* ── NVD Sync panel ───────────────────────────────────────────────────────── *@
@@ -319,6 +388,86 @@
 
 @section Scripts {
 <script>
+    // ── Greenbone sync ────────────────────────────────────────────────────────
+    let gbPollTimer = null;
+
+    async function startGbSync() {
+        const btn   = document.getElementById('gbSyncBtn');
+        const token = document.querySelector('#gbSyncForm input[name="__RequestVerificationToken"]').value;
+        btn.disabled = true;
+        btn.textContent = 'Importing…';
+
+        try {
+            const r = await fetch('@Url.Action("Sync", "Greenbone")', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: '__RequestVerificationToken=' + encodeURIComponent(token)
+            });
+            const d = await r.json();
+            if (!d.started) {
+                gbShowError(d.message ?? 'Already running.'); btn.disabled = false; btn.innerHTML = '&#8635; Start Import'; return;
+            }
+        } catch (e) {
+            gbShowError(e.message); btn.disabled = false; btn.innerHTML = '&#8635; Start Import'; return;
+        }
+
+        document.getElementById('gbProgress').classList.remove('d-none');
+        gbPollTimer = setInterval(gbPollStatus, 2000);
+        gbPollStatus();
+    }
+
+    async function gbPollStatus() {
+        try { const s = await (await fetch('@Url.Action("Status", "Greenbone")')).json(); gbUpdateProgress(s); } catch (_) {}
+    }
+
+    function gbUpdateProgress(s) {
+        const phaseMap = { Connecting: '🔌 Connecting…', Loading: '📋 Loading…', Fetching: '⬇ Fetching…', Saving: '💾 Saving…', Done: '✔ Complete', Failed: '✘ Failed' };
+        document.getElementById('gbPhaseLabel').textContent = phaseMap[s.phase] ?? s.phase;
+        document.getElementById('gbElapsed').textContent = s.elapsedSeconds > 0 ? gbFmt(s.elapsedSeconds) : '';
+
+        const saved = [];
+        if (s.findingsAdded   > 0) saved.push(s.findingsAdded + ' added');
+        if (s.findingsUpdated > 0) saved.push(s.findingsUpdated + ' updated');
+        if (s.assetsCreated   > 0) saved.push(s.assetsCreated + ' new assets');
+        document.getElementById('gbFetchLabel').textContent  = s.resultsFetched > 0 ? s.resultsFetched.toLocaleString() + ' results fetched' : '';
+        document.getElementById('gbSavedLabel').textContent  = saved.join(' · ');
+
+        if (s.isDone) {
+            clearInterval(gbPollTimer); gbPollTimer = null;
+            const btn = document.getElementById('gbSyncBtn'); btn.disabled = false; btn.innerHTML = '&#8635; Start Import';
+            document.getElementById('gbProgressBar').classList.remove('progress-bar-animated', 'progress-bar-striped');
+            if (s.phase === 'Done') { gbShowSuccess('✔ Import complete — ' + saved.join(', ') + ' in ' + gbFmt(s.elapsedSeconds) + '.'); loadGbFindingDelta(); }
+            else { document.getElementById('gbProgressBar').classList.add('bg-danger'); gbShowError('Import failed: ' + (s.error ?? 'Unknown error')); }
+        }
+    }
+
+    async function loadGbFindingDelta() {
+        try {
+            const d = await (await fetch('@Url.Action("FindingDelta", "Greenbone")')).json();
+            if (!d.items || d.items.length === 0) return;
+            const sc = { Critical: 'danger', High: 'warning', Medium: 'info', Low: 'secondary' };
+            const tbody = document.getElementById('gbFindingDeltaBody');
+            tbody.innerHTML = '';
+            d.items.forEach(function (item) {
+                const cls = sc[item.severity] || 'secondary';
+                const cveLink = item.cveId
+                    ? `<a href="https://nvd.nist.gov/vuln/detail/${item.cveId}" target="_blank" class="font-monospace small">${item.cveId}</a>`
+                    : '<span class="text-muted">—</span>';
+                tbody.innerHTML += `<tr><td>${cveLink}</td><td>${item.title}</td>
+                    <td><span class="badge bg-${cls}">${item.severity}</span></td>
+                    <td>${item.cvss != null ? item.cvss.toFixed(1) : '—'}</td>
+                    <td><a href="/Assets/Details/${item.assetId}">${item.assetName}</a></td>
+                    <td><small>${item.detectedAt}</small></td></tr>`;
+            });
+            document.getElementById('gbFindingDeltaSection').classList.remove('d-none');
+        } catch (_) {}
+    }
+
+    function gbFmt(sec) { return sec < 60 ? sec + 's' : Math.floor(sec/60) + 'm ' + (sec%60) + 's'; }
+    function gbShowSuccess(msg) { const el = document.getElementById('gbSuccessBanner'); document.getElementById('gbSuccessText').textContent = msg; el.classList.remove('d-none'); el.classList.add('show'); }
+    function gbShowError(msg)   { document.getElementById('gbProgress').classList.remove('d-none'); const el = document.getElementById('gbErrorBanner'); document.getElementById('gbErrorText').textContent = msg; el.classList.remove('d-none'); el.classList.add('show'); }
+
+    // ── NVD sync ──────────────────────────────────────────────────────────────
     let pollTimer = null;
 
     async function startSync() {
