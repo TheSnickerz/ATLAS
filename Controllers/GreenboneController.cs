@@ -60,7 +60,18 @@ public class GreenboneController(
         }
         catch (Exception ex)
         {
-            return Json(new { ok = false, message = ex.Message });
+            var details = new System.Text.StringBuilder();
+            details.AppendLine($"[{ex.GetType().Name}] {ex.Message}");
+            var inner = ex.InnerException;
+            int depth = 1;
+            while (inner != null)
+            {
+                details.AppendLine($"  Caused by [{inner.GetType().Name}] {inner.Message}");
+                inner = inner.InnerException;
+                if (++depth > 5) break;
+            }
+            logger.LogError(ex, "Greenbone TestConnection failed");
+            return Json(new { ok = false, message = details.ToString().Trim() });
         }
     }
 

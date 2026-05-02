@@ -1,4 +1,4 @@
-@model IEnumerable<ATLAS.Models.Asset>
+@model ATLAS.Models.AssetIndexViewModel
 @{
     ViewData["Title"] = "Assets";
 }
@@ -98,6 +98,58 @@
     </table>
 </div>
 
+@* ── Search / filter bar ───────────────────────────────────────────────────── *@
+<form method="get" class="row g-2 mb-3">
+    <div class="col-md-5">
+        <input name="search" class="form-control" placeholder="Search name, owner, department, location…"
+               value="@Model.Search" />
+    </div>
+    <div class="col-md-3">
+        <select name="vlan" class="form-select">
+            <option value="">All VLANs</option>
+            @foreach (var v in Model.AvailableVlans)
+            {
+                if (Model.VlanFilter == v) { <option value="@v" selected>@v</option> }
+                else                       { <option value="@v">@v</option> }
+            }
+        </select>
+    </div>
+    <div class="col-auto d-flex gap-2">
+        <button type="submit" class="btn btn-primary">Filter</button>
+        <a asp-action="Index" class="btn btn-outline-secondary">Reset</a>
+    </div>
+    <input type="hidden" name="pageSize" value="@Model.PageSize" />
+</form>
+
+@* ── Result count + page-size selector ───────────────────────────────────────── *@
+<div class="d-flex justify-content-between align-items-center mb-2">
+    <small class="text-muted">
+        @if (Model.TotalFilteredCount == 0)
+        {
+            <span>No assets found.</span>
+        }
+        else
+        {
+            <span>
+                Showing @((Model.Page - 1) * Model.PageSize + 1)–@(Math.Min(Model.Page * Model.PageSize, Model.TotalFilteredCount))
+                of @Model.TotalFilteredCount asset(s)
+            </span>
+        }
+    </small>
+    <form method="get" class="d-flex align-items-center gap-2">
+        <input type="hidden" name="search" value="@Model.Search" />
+        <input type="hidden" name="vlan"   value="@Model.VlanFilter" />
+        <label class="small text-muted mb-0">Per page:</label>
+        <select name="pageSize" class="form-select form-select-sm w-auto" onchange="this.form.submit()">
+            @foreach (var ps in new[] { 25, 50, 100 })
+            {
+                if (Model.PageSize == ps) { <option value="@ps" selected>@ps</option> }
+                else                      { <option value="@ps">@ps</option> }
+            }
+        </select>
+    </form>
+</div>
+
 @* ── Assets table ─────────────────────────────────────────────────────────── *@
 <table class="table table-hover table-bordered">
     <thead class="table-dark">
@@ -106,6 +158,7 @@
             <th>Category</th>
             <th>Type / Subtype</th>
             <th>Identifier</th>
+            <th>VLAN</th>
             <th>Owner</th>
             <th>Status</th>
             <th>Open Findings</th>
@@ -113,7 +166,7 @@
         </tr>
     </thead>
     <tbody>
-        @foreach (var a in Model)
+        @foreach (var a in Model.Assets)
         {
             var openCount = a.AssetVulnerabilities.Count(av => av.Status == ATLAS.Models.RemediationStatus.Open);
             <tr>
@@ -121,6 +174,7 @@
                 <td>@a.Category</td>
                 <td>@a.SubTypeLabel</td>
                 <td><small class="text-muted">@(a.Identifier ?? "—")</small></td>
+                <td><small class="text-muted">@(a.Vlan ?? "—")</small></td>
                 <td>@(a.Owner ?? "—")</td>
                 <td>
                     <span class="badge bg-@(a.Status == ATLAS.Models.AssetStatus.Active ? "success" : "secondary")">
@@ -143,12 +197,51 @@
                 </td>
             </tr>
         }
-        @if (!Model.Any())
+        @if (!Model.Assets.Any())
         {
-            <tr><td colspan="8" class="text-center text-muted py-4">No assets yet. <a asp-action="Create">Add one.</a></td></tr>
+            <tr><td colspan="9" class="text-center text-muted py-4">No assets found. @if (Model.Search != null || Model.VlanFilter != null) { <a asp-action="Index">Clear filters.</a> } else { <a asp-action="Create">Add one.</a> }</td></tr>
         }
     </tbody>
 </table>
+
+@* ── Pagination ───────────────────────────────────────────────────────────── *@
+@if (Model.TotalPages > 1)
+{
+    <nav aria-label="Asset pages">
+        <ul class="pagination justify-content-center flex-wrap">
+            @{
+                int winStart = Math.Max(1, Model.Page - 4);
+                int winEnd   = Math.Min(Model.TotalPages, Model.Page + 4);
+            }
+            @if (winStart > 1)
+            {
+                <li class="page-item">
+                    <a class="page-link" asp-action="Index"
+                       asp-route-page="1" asp-route-search="@Model.Search"
+                       asp-route-vlan="@Model.VlanFilter" asp-route-pageSize="@Model.PageSize">1</a>
+                </li>
+                @if (winStart > 2) { <li class="page-item disabled"><span class="page-link">…</span></li> }
+            }
+            @for (var p = winStart; p <= winEnd; p++)
+            {
+                <li class="page-item @(p == Model.Page ? "active" : "")">
+                    <a class="page-link" asp-action="Index"
+                       asp-route-page="@p" asp-route-search="@Model.Search"
+                       asp-route-vlan="@Model.VlanFilter" asp-route-pageSize="@Model.PageSize">@p</a>
+                </li>
+            }
+            @if (winEnd < Model.TotalPages)
+            {
+                @if (winEnd < Model.TotalPages - 1) { <li class="page-item disabled"><span class="page-link">…</span></li> }
+                <li class="page-item">
+                    <a class="page-link" asp-action="Index"
+                       asp-route-page="@Model.TotalPages" asp-route-search="@Model.Search"
+                       asp-route-vlan="@Model.VlanFilter" asp-route-pageSize="@Model.PageSize">@Model.TotalPages</a>
+                </li>
+            }
+        </ul>
+    </nav>
+}
 
 @section Scripts {
 <script>

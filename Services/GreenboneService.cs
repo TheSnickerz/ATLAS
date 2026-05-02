@@ -32,9 +32,22 @@ public class GreenboneService(IConfiguration config, ILogger<GreenboneService> l
     public async Task<string> TestConnectionAsync(CancellationToken ct = default)
     {
         await using var client = new GmpClient();
-        await client.ConnectAsync(Host, Port, IgnoreTls, ct);
-        await client.AuthenticateAsync(Username, Password, ct);
-        return $"Connected as {Username} to {Host}:{Port}";
+
+        try { await client.ConnectAsync(Host, Port, IgnoreTls, ct); }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException(
+                $"Step 1 — TCP/TLS connect to {Host}:{Port} failed: {ex.Message}", ex);
+        }
+
+        try { await client.AuthenticateAsync(Username, Password, ct); }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException(
+                $"Step 2 — GMP authenticate as '{Username}' failed: {ex.Message}", ex);
+        }
+
+        return $"OK — connected and authenticated as {Username} to {Host}:{Port}";
     }
 
     // ── Finding stream ────────────────────────────────────────────────────────
@@ -59,7 +72,8 @@ public class GreenboneService(IConfiguration config, ILogger<GreenboneService> l
 
         while (!ct.IsCancellationRequested)
         {
-            var xml = $"""<get_results details="1" filter="apply_overrides=0 min_qod=70 first={first} rows={pageSize}"/>""";
+            // first and rows must be in the filter string — GMP ignores them as XML attributes
+            var xml = $"""<get_results details="1" filter="apply_overrides=0 min_qod=0 owner=any first={first} rows={pageSize}"/>""";
             var doc = await client.SendAsync(xml, ct);
 
             var status = doc.Root?.Attribute("status")?.Value;
@@ -69,6 +83,22 @@ public class GreenboneService(IConfiguration config, ILogger<GreenboneService> l
                     status, doc.Root?.Attribute("status_text")?.Value);
                 yield break;
             }
+
+            // On the first page, dump the raw XML (truncated) so we can see the response shape
+            if (first == 1)
+            {
+                var raw = doc.ToString();
+                logger.LogInformation("GMP raw response (first 2000 chars): {Raw}",
+                    raw.Length > 2000 ? raw[..2000] : raw);
+            }
+
+            // Log the result_count element so we can see what Greenbone reports
+            var countEl = doc.Root!.Element("result_count");
+            var filteredCount = countEl?.Element("filtered")?.Value ?? countEl?.Value ?? "?";
+            var totalCount    = countEl?.Attribute("full")?.Value
+                             ?? countEl?.Element("full")?.Value ?? "?";
+            logger.LogInformation("GMP page first={First}: filtered={Filtered}, full={Full}, results-in-page={InPage}",
+                first, filteredCount, totalCount, doc.Root!.Elements("result").Count());
 
             var results = doc.Root!.Elements("result").ToList();
             if (results.Count == 0)
@@ -141,13 +171,8 @@ public class GreenboneService(IConfiguration config, ILogger<GreenboneService> l
             }
 
             // ── Pagination ────────────────────────────────────────────────────
-            var filteredStr = doc.Root
-                .Element("result_count")?.Element("filtered")?.Value
-                ?? "0";
-            int.TryParse(filteredStr, out var total);
-
             first += results.Count;
-            if (results.Count < pageSize || first > total) yield break;
+            if (results.Count < pageSize) yield break; // last page
         }
     }
 }
