@@ -8,7 +8,7 @@ ATLAS is an internal IT asset management and vulnerability tracking system built
 ## How to Run
 
 ```bash
-# From /Users/snickers/ATLAS
+# From /Users/snickers/ClaudeCode/Projects/ATLAS
 GREENBONE_PASSWORD='W64FK9ic2Oi#6$RDJw@P' docker compose up --build -d
 ```
 
@@ -81,7 +81,7 @@ Do not merge to `main` until Greenbone sync is fully tested.
 ## Project Structure
 
 ```
-/Users/snickers/ATLAS/
+/Users/snickers/ClaudeCode/Projects/ATLAS/
 ├── Controllers/
 │   ├── AssetsController.cs          # CRUD + PowerShell query apply
 │   ├── AssetVulnerabilitiesController.cs
@@ -201,10 +201,10 @@ dotnet ef migrations add MigrationName
 
 ```bash
 # Build only (no Docker)
-cd /Users/snickers/ATLAS && dotnet build
+cd /Users/snickers/ClaudeCode/Projects/ATLAS && dotnet build
 
 # Add EF migration
-cd /Users/snickers/ATLAS && dotnet ef migrations add MigrationName
+cd /Users/snickers/ClaudeCode/Projects/ATLAS && dotnet ef migrations add MigrationName
 
 # Start with Greenbone password
 GREENBONE_PASSWORD='W64FK9ic2Oi#6$RDJw@P' docker compose up --build -d
